@@ -1,0 +1,890 @@
+CREATE OR REPLACE TABLE
+  `lookerstudioreporting.lastrat_seo.template_dashboard_seo_analyse_macro` ( 
+    time_scale STRING,
+    date DATE,
+    landing_page STRING,
+    query STRING,
+    device STRING,
+    organic_sessions INT64,
+    organic_conversion_micro INT64,
+    organic_conversion_macro INT64,
+    impressions INT64,
+    clicks INT64,
+    sum_position INT64,
+    query_top_3 INT64,
+    query_top_10 INT64,
+    query_top_4_10 INT64,
+    query_top_11_20 INT64,
+    query_top_21_50 INT64,
+    count_query_position_on_period INT64,
+    position_range STRING,
+    position_range_order INT64 
+    )
+PARTITION BY
+  date AS ( ------------------------------------------------------ ----------- Google Analytics 4 Preanalysis ----------- ------------------------------------------------------
+  WITH
+    preanalysis_ga4_layer_1 AS (
+    SELECT
+      event_timestamp,
+      FORMAT_DATE("%Y-%m-%d",PARSE_DATE("%Y%m%d",event_date)) AS event_date,
+      (CONCAT(user_pseudo_id,(
+          SELECT
+            value.int_value
+          FROM
+            UNNEST(event_params)
+          WHERE
+            KEY = 'ga_session_id'))) AS custom_session_id,
+      event_name,
+      (
+      SELECT
+        value.string_value
+      FROM
+        UNNEST(event_params)
+      WHERE
+        KEY = 'medium') AS medium,
+      (
+      SELECT
+        value.string_value
+      FROM
+        UNNEST(event_params)
+      WHERE
+        KEY = 'page_location') AS landing_page,
+      device.category AS device,
+      (CASE
+          WHEN event_name = "Telechargement_doc" THEN 1
+      END
+        ) AS conversion_micro,
+      (CASE
+          WHEN event_name = "generate_lead" OR event_name = "event_scheduled" THEN 1
+      END
+        ) AS conversion_macro
+    FROM
+      `lookerstudioreporting.analytics_299038003.events_*`
+    WHERE
+      user_pseudo_id IS NOT NULL ),
+    preanalysis_ga4_layer_2 AS (
+    SELECT
+      DISTINCT DATE(FIRST_VALUE(event_date IGNORE NULLS) OVER w1) AS date,
+      custom_session_id,
+      FIRST_VALUE(medium IGNORE NULLS) OVER w1 AS medium,
+      FIRST_VALUE(landing_page IGNORE NULLS) OVER w1 AS landing_page,
+      FIRST_VALUE(device IGNORE NULLS) OVER w1 AS device,
+      COUNT(DISTINCT conversion_micro) OVER w2 AS conversion_micro,
+      COUNT(DISTINCT conversion_macro) OVER w2 AS conversion_macro,
+    FROM
+      preanalysis_ga4_layer_1
+    WHERE
+      custom_session_id IS NOT NULL
+    WINDOW
+      w1 AS (
+      PARTITION BY
+        custom_session_id
+      ORDER BY
+        event_timestamp ROWS BETWEEN UNBOUNDED PRECEDING
+        AND UNBOUNDED FOLLOWING),
+      w2 AS (
+      PARTITION BY
+        custom_session_id) ),
+    preanalysis_ga4_layer_3 AS (
+    SELECT
+      date,
+      landing_page,
+      device,
+      COUNT(DISTINCT custom_session_id) AS organic_sessions,
+      SUM(conversion_micro) AS organic_conversion_micro,
+      SUM(conversion_macro) AS organic_conversion_macro
+    FROM
+      preanalysis_ga4_layer_2
+    WHERE
+      medium = "organic"
+    GROUP BY
+      1,
+      2,
+      3
+    UNION ALL
+    SELECT
+      date,
+      landing_page,
+      "all" AS device,
+      COUNT(DISTINCT custom_session_id) AS organic_sessions,
+      SUM(conversion_micro) AS organic_conversion_micro,
+      SUM(conversion_macro) AS organic_conversion_macro
+    FROM
+      preanalysis_ga4_layer_2
+    WHERE
+      medium = "organic"
+    GROUP BY
+      1,
+      2,
+      3
+    ),
+preanalysis_gsc_layer_1 AS (
+  SELECT
+    DATE_TRUNC(DATE(data_date),MONTH) AS date_month,
+    DATE_TRUNC(DATE(data_date),ISOWEEK) AS date_week,
+    data_date AS date_day,
+    url,
+    query,
+    LOWER(device) AS device,
+    SUM(impressions) AS impressions,
+    SUM(clicks) AS clicks,
+    SUM(sum_position) AS sum_position
+  FROM
+ `lookerstudioreporting.searchconsole_lastrat.searchdata_url_impression`
+  WHERE
+    search_type = "WEB"
+  GROUP BY
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  UNION ALL
+  SELECT
+    DATE_TRUNC(DATE(data_date),MONTH) AS date_month,
+    DATE_TRUNC(DATE(data_date),ISOWEEK) AS date_week,
+    data_date AS date_day,
+    url,
+    query,
+    "all" AS device,
+    SUM(impressions) AS impressions,
+    SUM(clicks) AS clicks,
+    SUM(sum_position) AS sum_position
+  FROM
+    `lookerstudioreporting.searchconsole_lastrat.searchdata_url_impression`
+  WHERE
+    search_type = "WEB"
+  GROUP BY
+    1,
+    2,
+    3,
+    4,
+    5,
+    6 ),
+final_macro_analysis_layer_1 AS (
+SELECT DISTINCT 
+"Weekly" AS time_scale,
+  DATE_TRUNC(DATE(date),ISOWEEK) AS date,
+  landing_page,
+  CAST(NULL AS STRING) AS query,
+  device,
+  SUM(organic_sessions) AS organic_sessions,
+  SUM(organic_conversion_micro) AS organic_conversion_micro,
+  SUM(organic_conversion_macro) AS organic_conversion_macro,
+  CAST(NULL AS INT64) AS impressions,
+  CAST(NULL AS INT64) AS clicks,
+  CAST(NULL AS INT64) AS sum_position,
+  CAST(NULL AS INT64) AS count_query_position_on_period
+FROM
+  preanalysis_ga4_layer_3
+GROUP BY
+  1,
+  2,
+  3,
+  4,
+  5
+UNION ALL
+SELECT
+  DISTINCT "Monthly" AS time_scale,
+  DATE_TRUNC(DATE(date),MONTH) AS date,
+  landing_page,
+  CAST(NULL AS STRING) AS query,
+  device,
+  SUM(organic_sessions) AS organic_sessions,
+  SUM(organic_conversion_micro) AS organic_conversion_micro,
+  SUM(organic_conversion_macro) AS organic_conversion_macro,
+  CAST(NULL AS INT64) AS impressions,
+  CAST(NULL AS INT64) AS clicks,
+  CAST(NULL AS INT64) AS sum_position,
+  CAST(NULL AS INT64) AS count_query_position_on_period
+FROM
+  preanalysis_ga4_layer_3
+GROUP BY
+  1,
+  2,
+  3,
+  4,
+  5
+UNION ALL
+SELECT
+  DISTINCT "Weekly" AS time_scale,
+  date_week AS date,
+  url AS landing_page,
+  query,
+  device,
+  CAST(NULL AS INT64) AS organic_sessions,
+  CAST(NULL AS INT64) AS organic_conversion_micro,
+  CAST(NULL AS INT64) AS organic_conversion_macro,
+  SUM(impressions) AS impressions,
+  SUM(clicks) AS clicks,
+  SUM(sum_position) AS sum_position,
+  CAST(NULL AS INT64) AS count_query_position_on_period
+FROM
+  preanalysis_gsc_layer_1
+GROUP BY
+  1,
+  2,
+  3,
+  4,
+  5
+UNION ALL
+SELECT
+  DISTINCT "Monthly" AS time_scale,
+  date_month AS date,
+  url AS landing_page,
+  query,
+  device,
+  CAST(NULL AS INT64) AS organic_sessions,
+  CAST(NULL AS INT64) AS organic_conversion_micro,
+  CAST(NULL AS INT64) AS organic_conversion_macro,
+  SUM(impressions) AS impressions,
+  SUM(clicks) AS clicks,
+  SUM(sum_position) AS sum_position,
+  CAST(NULL AS INT64) AS count_query_position_on_period
+FROM
+  preanalysis_gsc_layer_1
+GROUP BY
+  1,
+  2,
+  3,
+  4,
+  5
+UNION ALL
+SELECT
+  DISTINCT "Weekly" AS time_scale,
+  date_week AS date,
+  url AS landing_page,
+  query,
+  device,
+  CAST(NULL AS INT64) AS organic_sessions,
+  CAST(NULL AS INT64) AS organic_conversion_micro,
+  CAST(NULL AS INT64) AS organic_conversion_macro,
+  CAST(NULL AS INT64) AS organic_sessions,
+  CAST(NULL AS INT64) AS clicks,
+  CAST(NULL AS INT64) AS sum_position,
+  COUNT (query) OVER (PARTITION BY date_week, url, query, device ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS count_query_position_on_period
+FROM
+  preanalysis_gsc_layer_1
+UNION ALL
+SELECT
+  DISTINCT "Monthly" AS time_scale,
+  date_month AS date,
+  url AS landing_page,
+  query,
+  device,
+  CAST(NULL AS INT64) AS organic_sessions,
+  CAST(NULL AS INT64) AS organic_conversion_micro,
+  CAST(NULL AS INT64) AS organic_conversion_macro,
+  CAST(NULL AS INT64) AS organic_sessions,
+  CAST(NULL AS INT64) AS clicks,
+  CAST(NULL AS INT64) AS sum_position,
+  COUNT (query) OVER (PARTITION BY date_month, url, query, device ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS count_query_position_on_period
+FROM
+  preanalysis_gsc_layer_1 ),
+  final_macro_analysis_layer_2 AS (
+  SELECT
+    DISTINCT time_scale,
+    date,
+    landing_page,
+    query,
+    device,
+    SUM(organic_sessions) AS organic_sessions,
+    SUM(organic_conversion_micro) AS organic_conversion_micro,
+    SUM(organic_conversion_macro) AS organic_conversion_macro,
+    SUM(impressions) AS impressions,
+    SUM(clicks) AS clicks,
+    SUM(sum_position) AS sum_position,
+    MAX(count_query_position_on_period) AS count_query_position_on_period
+  FROM
+    final_macro_analysis_layer_1
+  GROUP BY
+    1,
+    2,
+    3,
+    4,
+    5 ),
+  final_macro_analysis_layer_3 AS (
+  SELECT
+    time_scale,
+    date,
+    landing_page,
+    query,
+    device,
+    organic_sessions,
+    organic_conversion_micro,
+    organic_conversion_macro,
+    impressions,
+    clicks,
+    sum_position,
+    CASE
+      WHEN time_scale = "Monthly" AND (CEIL(SAFE_DIVIDE(sum_position, impressions) + 1)) <= 3 AND count_query_position_on_period >= 20 AND query IS NOT NULL THEN 1
+      WHEN time_scale = "Weekly"
+    AND (CEIL(SAFE_DIVIDE(sum_position, impressions) + 1)) <= 3
+    AND count_query_position_on_period >= 5
+    AND query IS NOT NULL THEN 1
+  END
+    AS query_top_3,
+    CASE
+      WHEN time_scale = "Monthly" AND (CEIL(SAFE_DIVIDE(sum_position, impressions) + 1)) <= 10 AND count_query_position_on_period >= 20 AND query IS NOT NULL THEN 1
+      WHEN time_scale = "Weekly"
+    AND (CEIL(SAFE_DIVIDE(sum_position, impressions) + 1)) <= 10
+    AND count_query_position_on_period >= 5
+    AND query IS NOT NULL THEN 1
+  END
+    AS query_top_10,
+    CASE
+      WHEN time_scale = "Monthly" AND (CEIL(SAFE_DIVIDE(sum_position, impressions) + 1)) BETWEEN 4 AND 10 AND count_query_position_on_period >= 20 AND query IS NOT NULL THEN 1
+      WHEN time_scale = "Weekly"
+    AND (CEIL(SAFE_DIVIDE(sum_position, impressions) + 1)) BETWEEN 4
+    AND 10
+    AND count_query_position_on_period >= 5
+    AND query IS NOT NULL THEN 1
+  END
+    AS query_top_4_10,
+    CASE
+      WHEN time_scale = "Monthly" AND (CEIL(SAFE_DIVIDE(sum_position, impressions) + 1)) BETWEEN 11 AND 20 AND count_query_position_on_period >= 20 AND query IS NOT NULL THEN 1
+      WHEN time_scale = "Weekly"
+    AND (CEIL(SAFE_DIVIDE(sum_position, impressions) + 1)) BETWEEN 11
+    AND 20
+    AND count_query_position_on_period >= 5
+    AND query IS NOT NULL THEN 1
+  END
+    AS query_top_11_20,
+    CASE
+      WHEN time_scale = "Monthly" AND (CEIL(SAFE_DIVIDE(sum_position, impressions) + 1)) BETWEEN 21 AND 50 AND count_query_position_on_period >= 20 AND query IS NOT NULL THEN 1
+      WHEN time_scale = "Weekly"
+    AND (CEIL(SAFE_DIVIDE(sum_position, impressions) + 1)) BETWEEN 21
+    AND 50
+    AND count_query_position_on_period >= 5
+    AND query IS NOT NULL THEN 1
+  END
+    AS query_top_21_50,
+    count_query_position_on_period
+  FROM
+    final_macro_analysis_layer_2 ),
+  final_macro_analysis_layer_4 AS (
+  SELECT
+    DISTINCT time_scale,
+    date,
+    landing_page,
+    query,
+    CASE
+      WHEN device = "all" THEN "Tous les appareils"
+      WHEN device = "desktop" THEN "Ordinateur"
+      WHEN device = "mobile" THEN "Téléphone"
+      WHEN device = "tablet" THEN "Tablette"
+  END
+    AS device,
+    organic_sessions,
+    organic_conversion_micro,
+    organic_conversion_macro,
+    impressions,
+    clicks,
+    sum_position,
+    query_top_3,
+    query_top_10,
+    query_top_4_10,
+    query_top_11_20,
+    query_top_21_50,
+    count_query_position_on_period,
+    CASE
+      WHEN query_top_3 = 1 THEN "1-3"
+      WHEN query_top_4_10 = 1 THEN "4-10"
+      WHEN query_top_11_20 = 1 THEN "11-20"
+      WHEN query_top_21_50 = 1 THEN "21-50"
+  END
+    AS position_range,
+    CASE
+      WHEN query_top_3 = 1 THEN 1
+      WHEN query_top_4_10 = 1 THEN 2
+      WHEN query_top_11_20 = 1 THEN 3
+      WHEN query_top_21_50 = 1 THEN 4
+    ELSE
+    5
+  END
+    AS position_range_order
+  FROM
+    final_macro_analysis_layer_3 )
+SELECT
+  *
+FROM
+  final_macro_analysis_layer_4 ); -------------------------------------------- ----------- Query Micro Analysis ----------- --------------------------------------------
+CREATE OR REPLACE TABLE
+  lookerstudioreporting.lastrat_seo.template_dashboard_seo_analyse_micro ( analysis_name STRING,
+    time_scale STRING,
+    kpi STRING,
+    date DATE,
+    landing_page STRING,
+    query STRING,
+    device STRING,
+    delta_p_p1 FLOAT64,
+    p FLOAT64,
+    p1 FLOAT64,
+    p2 FLOAT64,
+    p3 FLOAT64,
+    p4 FLOAT64,
+    p5 FLOAT64,
+    p6 FLOAT64,
+    p7 FLOAT64,
+    p8 FLOAT64,
+    p9 FLOAT64,
+    p10 FLOAT64,
+    p11 FLOAT64,
+    p12 FLOAT64 )
+PARTITION BY
+  date AS ( -------------------------------------------- ----------- Final Micro Analysis ----------- --------------------------------------------
+  WITH
+    micro_query_best_landing_page_analysis_layer_1 AS (
+    SELECT
+      DISTINCT time_scale,
+      date,
+      FIRST_VALUE(landing_page) OVER w1 AS landing_page,
+      query,
+      device,
+      CASE
+        WHEN time_scale = "Weekly" THEN DATETIME_DIFF(DATE_TRUNC(DATE_ADD(CURRENT_DATE, INTERVAL -1 WEEK), ISOWEEK), date, ISOWEEK)
+        WHEN time_scale = "Monthly" THEN DATETIME_DIFF(DATE_TRUNC(DATE_ADD(CURRENT_DATE, INTERVAL -1 MONTH), MONTH), date, MONTH)
+    END
+      AS timedelta,
+      FIRST_VALUE(impressions) OVER w1 AS impressions,
+      FIRST_VALUE(clicks) OVER w1 AS clicks,
+      FIRST_VALUE(sum_position) OVER w1 AS sum_position,
+      FIRST_VALUE(count_query_position_on_period) OVER w1 AS count_query_position_on_period
+    FROM
+`lookerstudioreporting.lastrat_seo.template_dashboard_seo_analyse_macro`
+    WHERE
+      query IS NOT NULL
+    WINDOW
+      w1 AS (
+      PARTITION BY
+        time_scale,
+        date,
+        query,
+        device
+      ORDER BY
+        impressions DESC ROWS BETWEEN UNBOUNDED PRECEDING
+        AND UNBOUNDED FOLLOWING) ),
+    micro_query_best_landing_page_analysis_layer_2 AS (
+    SELECT
+      time_scale,
+      date,
+      timedelta,
+      kpi,
+      landing_page,
+      query,
+      device,
+      CASE
+        WHEN kpi = "Impressions" THEN impressions
+        WHEN kpi = "Clics" THEN clicks
+        WHEN kpi = "Somme position" THEN sum_position
+        WHEN kpi = "Position moyenne"
+      AND (SAFE_DIVIDE(sum_position, impressions) + 1) <= 10 THEN SAFE_DIVIDE(sum_position, impressions) + 1
+        WHEN kpi = "Position moyenne" AND (SAFE_DIVIDE(sum_position, impressions) + 1) <= 100 THEN CEIL(SAFE_DIVIDE(sum_position, impressions)) + 1
+        WHEN kpi = "Position moyenne"
+      AND (SAFE_DIVIDE(sum_position, impressions) + 1) > 100 THEN 100
+        WHEN kpi = "CTR" THEN SAFE_DIVIDE(clicks, impressions)
+    END
+      AS kpi_value,
+      count_query_position_on_period
+    FROM
+      micro_query_best_landing_page_analysis_layer_1
+    CROSS JOIN (
+      SELECT
+        *
+      FROM
+        UNNEST(["Impressions", "Clics", "Somme position", "Position moyenne", "CTR"]) AS kpi)
+    WHERE
+      timedelta <= 12 ),
+    micro_query_best_landing_page_analysis_layer_3 AS (
+    SELECT
+      time_scale,
+      date,
+      kpi,
+      landing_page,
+      query,
+      device,
+      CASE
+        WHEN time_scale = "Weekly" AND timedelta = 0 AND count_query_position_on_period >= 5 THEN kpi_value
+        WHEN time_scale = "Monthly"
+      AND timedelta = 0
+      AND count_query_position_on_period >= 20 THEN kpi_value
+    END
+      AS p,
+      CASE
+        WHEN time_scale = "Weekly" AND timedelta = 1 AND count_query_position_on_period >= 5 THEN kpi_value
+        WHEN time_scale = "Monthly"
+      AND timedelta = 1
+      AND count_query_position_on_period >= 20 THEN kpi_value
+    END
+      AS p1,
+      CASE
+        WHEN time_scale = "Weekly" AND timedelta = 2 AND count_query_position_on_period >= 5 THEN kpi_value
+        WHEN time_scale = "Monthly"
+      AND timedelta = 2
+      AND count_query_position_on_period >= 20 THEN kpi_value
+    END
+      AS p2,
+      CASE
+        WHEN time_scale = "Weekly" AND timedelta = 3 AND count_query_position_on_period >= 5 THEN kpi_value
+        WHEN time_scale = "Monthly"
+      AND timedelta = 3
+      AND count_query_position_on_period >= 20 THEN kpi_value
+    END
+      AS p3,
+      CASE
+        WHEN time_scale = "Weekly" AND timedelta = 4 AND count_query_position_on_period >= 5 THEN kpi_value
+        WHEN time_scale = "Monthly"
+      AND timedelta = 4
+      AND count_query_position_on_period >= 20 THEN kpi_value
+    END
+      AS p4,
+      CASE
+        WHEN time_scale = "Weekly" AND timedelta = 5 AND count_query_position_on_period >= 5 THEN kpi_value
+        WHEN time_scale = "Monthly"
+      AND timedelta = 5
+      AND count_query_position_on_period >= 20 THEN kpi_value
+    END
+      AS p5,
+      CASE
+        WHEN time_scale = "Weekly" AND timedelta = 6 AND count_query_position_on_period >= 5 THEN kpi_value
+        WHEN time_scale = "Monthly"
+      AND timedelta = 6
+      AND count_query_position_on_period >= 20 THEN kpi_value
+    END
+      AS p6,
+      CASE
+        WHEN time_scale = "Weekly" AND timedelta = 7 AND count_query_position_on_period >= 5 THEN kpi_value
+        WHEN time_scale = "Monthly"
+      AND timedelta = 7
+      AND count_query_position_on_period >= 20 THEN kpi_value
+    END
+      AS p7,
+      CASE
+        WHEN time_scale = "Weekly" AND timedelta = 8 AND count_query_position_on_period >= 5 THEN kpi_value
+        WHEN time_scale = "Monthly"
+      AND timedelta = 8
+      AND count_query_position_on_period >= 20 THEN kpi_value
+    END
+      AS p8,
+      CASE
+        WHEN time_scale = "Weekly" AND timedelta = 9 AND count_query_position_on_period >= 5 THEN kpi_value
+        WHEN time_scale = "Monthly"
+      AND timedelta = 9
+      AND count_query_position_on_period >= 20 THEN kpi_value
+    END
+      AS p9,
+      CASE
+        WHEN time_scale = "Weekly" AND timedelta = 10 AND count_query_position_on_period >= 5 THEN kpi_value
+        WHEN time_scale = "Monthly"
+      AND timedelta = 10
+      AND count_query_position_on_period >= 20 THEN kpi_value
+    END
+      AS p10,
+      CASE
+        WHEN time_scale = "Weekly" AND timedelta = 11 AND count_query_position_on_period >= 5 THEN kpi_value
+        WHEN time_scale = "Monthly"
+      AND timedelta = 11
+      AND count_query_position_on_period >= 20 THEN kpi_value
+    END
+      AS p11,
+      CASE
+        WHEN time_scale = "Weekly" AND timedelta = 12 AND count_query_position_on_period >= 5 THEN kpi_value
+        WHEN time_scale = "Monthly"
+      AND timedelta = 12
+      AND count_query_position_on_period >= 20 THEN kpi_value
+    END
+      AS p12
+    FROM
+      micro_query_best_landing_page_analysis_layer_2 
+      ),
+    micro_query_best_landing_page_analysis_layer_4 AS (
+    SELECT
+      DISTINCT "query_best_landing_page_analysis" AS analysis_name,
+      time_scale,
+      kpi,
+      CASE
+        WHEN time_scale = "Weekly" THEN DATE_TRUNC(DATE_ADD(CURRENT_DATE, INTERVAL -1 WEEK), ISOWEEK)
+        WHEN time_scale = "Monthly" THEN DATE_TRUNC(DATE_ADD(CURRENT_DATE, INTERVAL -1 MONTH), MONTH)
+    END
+      AS date,
+      landing_page,
+      device,
+      query,
+      CASE
+        WHEN kpi = "Somme position" THEN SUM(IFNULL(p,0)) - SUM(IFNULL(p1,0))
+        WHEN kpi = "Impressions" THEN SUM(IFNULL(p,0)) - SUM(IFNULL(p1,0))
+        WHEN kpi = "Position moyenne" THEN (SUM(IFNULL(p,0)) - SUM(IFNULL(p1,0))) * -1
+        WHEN kpi = "CTR" THEN (SUM(IFNULL(p,0)) - SUM(IFNULL(p1,0)))
+        WHEN kpi = "Clics" THEN SUM(IFNULL(p,0)) - SUM(IFNULL(p1,0))
+    END
+      AS delta_p_p1,
+      SUM(p) AS p,
+      SUM(p1) AS p1,
+      SUM(p2) AS p2,
+      SUM(p3) AS p3,
+      SUM(p4) AS p4,
+      SUM(p5) AS p5,
+      SUM(p6) AS p6,
+      SUM(p7) AS p7,
+      SUM(p8) AS p8,
+      SUM(p9) AS p9,
+      SUM(p10) AS p10,
+      SUM(p11) AS p11,
+      SUM(p12) AS p12
+    FROM
+      micro_query_best_landing_page_analysis_layer_3
+    GROUP BY
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7 
+    ),
+    micro_analysis_page_layer_1 AS (
+    SELECT DISTINCT
+      time_scale,
+      date,
+      landing_page,
+      device,
+      CASE
+        WHEN time_scale = "Weekly" THEN DATETIME_DIFF(DATE_TRUNC(DATE_ADD(CURRENT_DATE, INTERVAL -1 WEEK),ISOWEEK), date, ISOWEEK)
+        WHEN time_scale = "Monthly" THEN DATETIME_DIFF(DATE_TRUNC(DATE_ADD(CURRENT_DATE, INTERVAL -1 MONTH),MONTH), date, MONTH)
+    END AS timedelta,
+      SUM(organic_sessions) AS organic_sessions,
+      SUM(organic_conversion_micro) AS organic_conversion_micro,
+      SUM(organic_conversion_macro) AS organic_conversion_macro,
+      SUM(impressions) AS impressions,
+      SUM(clicks) AS clicks,
+      SUM(sum_position) AS sum_position
+    FROM
+      `lookerstudioreporting.lastrat_seo.template_dashboard_seo_analyse_macro`
+    GROUP BY
+      1,
+      2,
+      3,
+      4,
+      5
+    ),
+    micro_analysis_page_layer_2 AS (
+    SELECT
+      time_scale,
+      date,
+      timedelta,
+      kpi,
+      landing_page,
+      device,
+      CASE
+        WHEN kpi = "Sessions organiques" THEN organic_sessions
+        WHEN kpi = "Conversions organiques (micro)" THEN organic_conversion_micro
+        WHEN kpi = "Conversions organiques (macro)" THEN organic_conversion_macro
+        WHEN kpi = "Impressions" THEN impressions
+        WHEN kpi = "Clics" THEN clicks
+        WHEN kpi = "Somme position" THEN sum_position
+        WHEN kpi = "Position moyenne" AND (SAFE_DIVIDE(sum_position, impressions) + 1) <= 10 THEN SAFE_DIVIDE(sum_position, impressions) +1
+        WHEN kpi = "Position moyenne"
+      AND (SAFE_DIVIDE(sum_position, impressions) + 1) <= 100 THEN CEIL(SAFE_DIVIDE(sum_position, impressions)) + 1
+        WHEN kpi = "Position moyenne" AND (SAFE_DIVIDE(sum_position, impressions) + 1) > 100 THEN 100
+        WHEN kpi = "CTR" THEN SAFE_DIVIDE(clicks, impressions)
+    END
+      AS kpi_value
+    FROM
+      micro_analysis_page_layer_1
+    CROSS JOIN (
+      SELECT
+        *
+      FROM
+        UNNEST(["Sessions organiques", "Conversions organiques (micro)", "Conversions organiques (macro)", "Impressions", "Clics", "Somme position", "Position moyenne", "CTR"]) AS kpi)
+    WHERE
+      timedelta <= 12 ),
+    micro_analysis_page_layer_3 AS (
+    SELECT
+      time_scale,
+      date,
+      kpi AS kpi,
+      landing_page,
+      device,
+      CASE
+        WHEN timedelta = 0 THEN kpi_value
+    END
+      AS p,
+      CASE
+        WHEN timedelta = 1 THEN kpi_value
+    END
+      AS p1,
+      CASE
+        WHEN timedelta = 2 THEN kpi_value
+    END
+      AS p2,
+      CASE
+        WHEN timedelta = 3 THEN kpi_value
+    END
+      AS p3,
+      CASE
+        WHEN timedelta = 4 THEN kpi_value
+    END
+      AS p4,
+      CASE
+        WHEN timedelta = 5 THEN kpi_value
+    END
+      AS p5,
+      CASE
+        WHEN timedelta = 6 THEN kpi_value
+    END
+      AS p6,
+      CASE
+        WHEN timedelta = 7 THEN kpi_value
+    END
+      AS p7,
+      CASE
+        WHEN timedelta = 8 THEN kpi_value
+    END
+      AS p8,
+      CASE
+        WHEN timedelta = 9 THEN kpi_value
+    END
+      AS p9,
+      CASE
+        WHEN timedelta = 10 THEN kpi_value
+    END
+      AS p10,
+      CASE
+        WHEN timedelta = 11 THEN kpi_value
+    END
+      AS p11,
+      CASE
+        WHEN timedelta = 12 THEN kpi_value
+    END
+      AS p12,
+    FROM
+      micro_analysis_page_layer_2 ),
+    micro_analysis_page_layer_4 AS (
+    SELECT
+      DISTINCT "landing_page_analysis" AS analysis_name,
+      time_scale,
+      kpi,
+      CASE
+        WHEN time_scale = "Weekly" THEN DATE_TRUNC(DATE_ADD(CURRENT_DATE, INTERVAL -1 WEEK), ISOWEEK)
+        WHEN time_scale = "Monthly" THEN DATE_TRUNC(DATE_ADD(CURRENT_DATE, INTERVAL -1 MONTH), MONTH)
+    END
+      AS date,
+      landing_page,
+      device,
+      CASE
+        WHEN kpi = "Sessions organiques" THEN SUM(IFNULL(p,0)) - SUM(IFNULL(p1,0))
+        WHEN kpi = "Utilisateurs organiques" THEN SUM(IFNULL(p,0)) - SUM(IFNULL(p1,0))
+        WHEN kpi = "Conversions organiques (micro)" THEN SUM(IFNULL(p,0)) - SUM(IFNULL(p1,0))
+        WHEN kpi = "Conversions organiques (macro)" THEN SUM(IFNULL(p,0)) - SUM(IFNULL(p1,0))
+        WHEN kpi = "Somme position" THEN SUM(IFNULL(p,0)) - SUM(IFNULL(p1,0))
+        WHEN kpi = "Impressions" THEN SUM(IFNULL(p,0)) - SUM(IFNULL(p1,0))
+        WHEN kpi = "Position moyenne" THEN (SUM(IFNULL(p,0)) - SUM(IFNULL(p1,0))) * -1
+        WHEN kpi = "CTR" THEN (SUM(IFNULL(p,0)) - SUM(IFNULL(p1,0)))
+        WHEN kpi = "Clics" THEN SUM(IFNULL(p,0)) - SUM(IFNULL(p1,0))
+    END
+      AS delta_p_p1,
+      SUM(p) AS p,
+      SUM(p1) AS p1,
+      SUM(p2) AS p2,
+      SUM(p3) AS p3,
+      SUM(p4) AS p4,
+      SUM(p5) AS p5,
+      SUM(p6) AS p6,
+      SUM(p7) AS p7,
+      SUM(p8) AS p8,
+      SUM(p9) AS p9,
+      SUM(p10) AS p10,
+      SUM(p11) AS p11,
+      SUM(p12) AS p12
+    FROM
+      micro_analysis_page_layer_3
+    GROUP BY
+      1,
+      2,
+      3,
+      4,
+      5,
+      6 ),
+    final_micro_analysis AS (
+    SELECT
+      analysis_name,
+      time_scale,
+      kpi,
+      date,
+      landing_page,
+      query,
+      device,
+      delta_p_p1,
+      p,
+      p1,
+      p2,
+      p3,
+      p4,
+      p5,
+      p6,
+      p7,
+      p8,
+      p9,
+      p10,
+      p11,
+      p12
+    FROM
+      micro_query_best_landing_page_analysis_layer_4
+    WHERE
+      NOT ( p IS NULL
+        AND p1 IS NULL
+        AND p2 IS NULL
+        AND p3 IS NULL
+        AND p4 IS NULL
+        AND p5 IS NULL
+        AND p6 IS NULL
+        AND p7 IS NULL
+        AND p8 IS NULL
+        AND p9 IS NULL
+        AND p10 IS NULL
+        AND p11 IS NULL
+        AND p12 IS NULL )
+    UNION ALL
+    SELECT
+      analysis_name,
+      time_scale,
+      kpi,
+      date,
+      landing_page,
+      CAST(NULL AS STRING) AS query,
+      device,
+      delta_p_p1,
+      p,
+      p1,
+      p2,
+      p3,
+      p4,
+      p5,
+      p6,
+      p7,
+      p8,
+      p9,
+      p10,
+      p11,
+      p12
+    FROM
+      micro_analysis_page_layer_4
+    WHERE
+      NOT ( p IS NULL
+        AND p1 IS NULL
+        AND p2 IS NULL
+        AND p3 IS NULL
+        AND p4 IS NULL
+        AND p5 IS NULL
+        AND p6 IS NULL
+        AND p7 IS NULL
+        AND p8 IS NULL
+        AND p9 IS NULL
+        AND p10 IS NULL
+        AND p11 IS NULL
+        AND p12 IS NULL ) )
+  SELECT
+    *
+  FROM
+    final_micro_analysis )
